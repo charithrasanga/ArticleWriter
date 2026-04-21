@@ -127,10 +127,113 @@ Return ONLY the JSON object. No preamble, no markdown fences.";
         string currentContent,
         string qualityFeedback,
         string[] revisionSuggestions,
+        int[]? weakSectionIndices,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Revising article based on QA feedback for topic: {Topic}", request.Topic);
 
+        // If QA identified specific weak sections, do a targeted revision (much cheaper).
+        // Fall back to full revision when no indices were provided or the array is empty.
+        if (weakSectionIndices is { Length: > 0 })
+        {
+            return await ReviseTargetedSectionsAsync(
+                request, currentContent, qualityFeedback,
+                revisionSuggestions, weakSectionIndices, cancellationToken);
+        }
+
+        return await ReviseFullArticleAsync(
+            request, currentContent, qualityFeedback, revisionSuggestions, cancellationToken);
+    }
+
+    // ── Targeted (section-level) revision ────────────────────────────────────
+
+    private async Task<string> ReviseTargetedSectionsAsync(
+        ArticleRequest request,
+        string currentContent,
+        string qualityFeedback,
+        string[] revisionSuggestions,
+        int[] weakSectionIndices,
+        CancellationToken cancellationToken)
+    {
+        // Extract the sections that need revision from the full article JSON.
+        List<(int Index, string SectionJson)> weakSections = ExtractSectionsByIndex(currentContent, weakSectionIndices);
+
+        if (weakSections.Count == 0)
+        {
+            // Could not parse sections — fall back to full revision.
+            _logger.LogWarning("Could not extract weak sections; falling back to full revision.");
+            return await ReviseFullArticleAsync(request, currentContent, qualityFeedback, revisionSuggestions, cancellationToken);
+        }
+
+        _logger.LogInformation("Targeted revision: rewriting {Count} of {Total} sections (indices: {Indices})",
+            weakSections.Count, request.KeyPoints.Length, string.Join(", ", weakSectionIndices));
+
+        var systemPrompt = @"
+You are a professional content editor performing a targeted section revision.
+You will receive specific article sections that need improvement, along with QA feedback.
+
+REVISION RULES:
+- Address EVERY revision suggestion item — no exceptions.
+- Improve only what is needed; do not change the section title or imageQuery unless they are flagged.
+- Maintain existing citations; add more only from the original research data.
+- Do NOT change the section structure — keep the same number of subsections.
+
+MANDATORY OUTPUT FORMAT — return ONLY a JSON array of the revised sections (same structure as input):
+[
+  {
+    ""title"": ""..."",
+    ""imageQuery"": ""..."",
+    ""summary"": ""..."",
+    ""subsections"": [ { ""heading"": ""..."", ""content"": ""..."" } ]
+  }
+]
+
+LANGUAGE RULE: Preserve the article language throughout. Do NOT translate to English.
+Only imageQuery must remain in English.
+
+Return ONLY the JSON array — no preamble, no markdown fences.";
+
+        var suggestionsFormatted = string.Join("\n", revisionSuggestions.Select((s, i) => $"  {i + 1}. {s}"));
+        var sectionsJson = System.Text.Json.JsonSerializer.Serialize(
+            weakSections.Select(s => System.Text.Json.JsonDocument.Parse(s.SectionJson).RootElement).ToArray(),
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        var userMessage = $@"
+Revise the following article sections based on the QA feedback.
+
+ORIGINAL REQUEST:
+Topic: {request.Topic}
+Target Audience: {request.TargetAudience}
+Tone: {request.ToneOfVoice}
+
+QUALITY FEEDBACK:
+{qualityFeedback}
+
+SPECIFIC REVISION SUGGESTIONS (address each one):
+{suggestionsFormatted}
+
+SECTIONS TO REVISE (indices {string.Join(", ", weakSectionIndices)}):
+{sectionsJson}
+
+Return ONLY the JSON array with the revised sections (same count and order as input).";
+
+        var response = await CallAsync(systemPrompt, userMessage, cancellationToken);
+
+        // Merge the revised sections back into the full article JSON.
+        var merged = MergeRevisedSections(currentContent, weakSections.Select(s => s.Index).ToArray(), response);
+        _logger.LogInformation("Targeted revision completed for topic: {Topic}", request.Topic);
+        return merged;
+    }
+
+    // ── Full-article revision (fallback) ──────────────────────────────────────
+
+    private async Task<string> ReviseFullArticleAsync(
+        ArticleRequest request,
+        string currentContent,
+        string qualityFeedback,
+        string[] revisionSuggestions,
+        CancellationToken cancellationToken)
+    {
         var systemPrompt = @"
 You are a professional content editor. Revise the article draft to address every piece of QA feedback.
 
@@ -170,7 +273,6 @@ TOOL USAGE:
 After revising, call check_section_count_async with the revised JSON and the original key points to confirm
 no sections were accidentally removed. Fix any missing sections before returning.";
 
-
         var suggestionsFormatted = string.Join("\n", revisionSuggestions.Select((s, i) => $"  {i + 1}. {s}"));
 
         var userMessage = $@"
@@ -200,7 +302,102 @@ Instructions:
 
         var reviseTools = new[] { _articleCheck.CheckSectionCountFunction() };
         var response = await CallWithToolsAsync(systemPrompt, userMessage, reviseTools, cancellationToken);
-        _logger.LogInformation("Article revision completed for topic: {Topic}", request.Topic);
+        _logger.LogInformation("Full article revision completed for topic: {Topic}", request.Topic);
         return response;
+    }
+
+    // ── Section extraction / merging helpers ──────────────────────────────────
+
+    /// <summary>
+    /// Extracts the JSON element for each requested section index from the article JSON.
+    /// Returns only the successfully extracted (index, raw JSON) pairs.
+    /// </summary>
+    private static List<(int Index, string SectionJson)> ExtractSectionsByIndex(
+        string articleJson, int[] indices)
+    {
+        var result = new List<(int, string)>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(articleJson);
+            if (!doc.RootElement.TryGetProperty("sections", out var sections)
+                || sections.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return result;
+
+            var sectionArray = sections.EnumerateArray().ToList();
+            foreach (var idx in indices)
+            {
+                if (idx >= 0 && idx < sectionArray.Count)
+                    result.Add((idx, sectionArray[idx].GetRawText()));
+            }
+        }
+        catch (System.Text.Json.JsonException) { /* return whatever we got */ }
+        return result;
+    }
+
+    /// <summary>
+    /// Parses the LLM-returned revised sections array and splices them back
+    /// into their original positions in the full article JSON string.
+    /// Falls back to returning <paramref name="originalJson"/> unchanged if parsing fails.
+    /// </summary>
+    private string MergeRevisedSections(string originalJson, int[] targetIndices, string revisedSectionsJson)
+    {
+        try
+        {
+            revisedSectionsJson = ExtractJsonArrayFromText(revisedSectionsJson.Trim());
+
+            using var origDoc    = System.Text.Json.JsonDocument.Parse(originalJson);
+            using var revisedDoc = System.Text.Json.JsonDocument.Parse(revisedSectionsJson);
+
+            if (revisedDoc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                _logger.LogWarning("Revised sections response was not a JSON array; keeping original.");
+                return originalJson;
+            }
+
+            var revisedArray  = revisedDoc.RootElement.EnumerateArray().ToList();
+            var origSections  = origDoc.RootElement.GetProperty("sections").EnumerateArray().ToList();
+
+            // Splice each revised section in at its target index.
+            for (int i = 0; i < targetIndices.Length && i < revisedArray.Count; i++)
+                origSections[targetIndices[i]] = revisedArray[i];
+
+            // Rebuild the full JSON with the patched sections array.
+            var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = false };
+            using var stream = new System.IO.MemoryStream();
+            using var writer = new System.Text.Json.Utf8JsonWriter(stream);
+
+            writer.WriteStartObject();
+            foreach (var prop in origDoc.RootElement.EnumerateObject())
+            {
+                if (prop.Name == "sections")
+                {
+                    writer.WritePropertyName("sections");
+                    writer.WriteStartArray();
+                    foreach (var sec in origSections)
+                        sec.WriteTo(writer);
+                    writer.WriteEndArray();
+                }
+                else
+                {
+                    prop.WriteTo(writer);
+                }
+            }
+            writer.WriteEndObject();
+            writer.Flush();
+
+            return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge revised sections; returning original article.");
+            return originalJson;
+        }
+    }
+
+    private static string ExtractJsonArrayFromText(string text)
+    {
+        var start = text.IndexOf('[');
+        var end   = text.LastIndexOf(']');
+        return start >= 0 && end > start ? text[start..(end + 1)] : text;
     }
 }

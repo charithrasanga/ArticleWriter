@@ -24,13 +24,15 @@ public interface IContentCreationAgent
 
     /// <summary>
     /// Produces a revised draft that explicitly addresses the quality feedback.
-    /// This uses a different prompt strategy from <see cref="CreateAsync"/>.
+    /// When <paramref name="weakSectionIndices"/> is non-empty only those sections are
+    /// rewritten; otherwise a full revision is performed.
     /// </summary>
     Task<string> ReviseAsync(
         ArticleRequest request,
         string currentContent,
         string qualityFeedback,
         string[] revisionSuggestions,
+        int[]? weakSectionIndices,
         CancellationToken cancellationToken = default);
 }
 

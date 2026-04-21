@@ -89,25 +89,50 @@ Return ONLY the JSON array — no additional text or formatting.";
 
     private async Task<string> ConductTopicResearchAsync(ArticleRequest articleRequest, CancellationToken cancellationToken)
     {
-        var systemPrompt = @"
-You are a professional research agent with access to real-time web search. Your job is to compile
-factual, well-sourced research for article writing.
+        // ── Step 1: Fire all searches in parallel ────────────────────────────
+        // One broad overview query + one focused query per key point.
+        var queries = new List<string>
+        {
+            $"{articleRequest.Topic} overview {articleRequest.TargetAudience}"
+        };
+        queries.AddRange(articleRequest.KeyPoints.Select(kp => $"{articleRequest.Topic} {kp}"));
 
-TOOL USAGE STRATEGY - follow this exact sequence:
-1. Call search_web_async with a broad query for the topic to get an overview and initial sources.
-2. Call search_web_async with more specific queries for each key point (at least one search per key area).
-3. For any specific article URL you want to include, call validate_url_async first.
-   If it returns INVALID, use only the domain root (e.g. https://www.bbc.com) instead.
-4. After gathering enough material, compile your findings into the JSON response below.
+        _logger.LogInformation("ResearchAgent: firing {Count} search queries in parallel", queries.Count);
+
+        var searchTasks = queries
+            .Select(q => _webSearch.SearchWebAsync(q))
+            .ToList();
+
+        string[] searchResults = await Task.WhenAll(searchTasks);
+
+        // ── Step 2: Compile all results into a single context block ──────────
+        var contextBuilder = new System.Text.StringBuilder();
+        for (int i = 0; i < queries.Count; i++)
+        {
+            contextBuilder.AppendLine($"=== Search: {queries[i]} ===");
+            contextBuilder.AppendLine(searchResults[i]);
+            contextBuilder.AppendLine();
+        }
+        var preSearchedContext = contextBuilder.ToString();
+
+        // ── Step 3: LLM synthesises from pre-fetched data ────────────────────
+        // The LLM only needs validate_url_async now — all searches are already done.
+        var systemPrompt = @"
+You are a professional research agent. All web searches have already been performed for you.
+Your job is to synthesise the provided search results into a structured research JSON object.
+
+URL VALIDATION:
+- For any specific article or page URL you want to include, call validate_url_async first.
+- If it returns INVALID, use only the domain root (e.g. https://www.bbc.com) instead.
+- Well-known domains (wikipedia.org, reuters.com, bbc.com, etc.) are pre-validated — no need to call validate_url_async for them.
 
 SOURCE RULES:
-- Only include URLs returned by the search tool or verified by validate_url_async.
+- Only include URLs that appear in the search results below or are verified by validate_url_async.
 - Never fabricate or guess URL path segments.
-- If a precise URL is unverified, use the domain root with 'note': 'domain reference only'.
 
 RETURN a JSON object with this exact structure:
 {
-  ""query"": ""<search query used>"",
+  ""query"": ""<main topic searched>"",
   ""sources"": [
     { ""name"": ""Publication / Organisation"", ""url"": ""https://verified-domain.com/optional-path"" }
   ],
@@ -117,26 +142,25 @@ RETURN a JSON object with this exact structure:
 }
 
 Aim for 5-7 credible sources, 8-10 key facts, and 3-5 attributed quotes.
-Return ONLY the JSON object - no preamble, no code fences.";
+Return ONLY the JSON object — no preamble, no code fences.";
 
         var userMessage = $@"
-Research the following topic thoroughly using the search tools available to you:
+Synthesise research for the following article brief using the search results provided below.
 
 Topic:           {articleRequest.Topic}
 Target Audience: {articleRequest.TargetAudience}
 Key Points:      {string.Join(", ", articleRequest.KeyPoints)}
 Tone:            {articleRequest.ToneOfVoice}
 
-Steps:
-1. Search broadly first: search_web_async(""{articleRequest.Topic} overview"")
-2. Search for each key point to gather specific facts and sources
-3. Validate any specific article URLs before including them
+--- PRE-FETCHED SEARCH RESULTS ---
+{preSearchedContext}
+--- END OF SEARCH RESULTS ---
 
-After all searches, compile and return ONLY the JSON research object.";
+Using only the above results, compile and return the JSON research object.
+Validate any specific article URLs you wish to include using validate_url_async before adding them.";
 
         var tools = new[]
         {
-            _webSearch.AsAIFunction(),
             _urlValidatorTool.AsAIFunction()
         };
 

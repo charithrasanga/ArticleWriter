@@ -77,6 +77,13 @@ REVISION DECISION LOGIC (you are the sole authority):
 
 Provide specific, actionable revision suggestions when requiresRevision is true.
 
+SECTION TARGETING — when requiresRevision is true:
+- Review each section of the article individually.
+- In ""weakSectionIndices"", list the 0-based indices of sections that fall below the quality bar
+  (e.g. [0, 2] means the 1st and 3rd sections need work).
+- List only the sections that genuinely need revision. If the whole article is weak, list all indices.
+- If requiresRevision is false, set weakSectionIndices to [].
+
 RETURN ONLY THIS JSON (no markdown):
 {{
   ""overallScore"": <average of all 8 scores>,
@@ -90,7 +97,8 @@ RETURN ONLY THIS JSON (no markdown):
   ""relevanceScore"": <1-10>,
   ""feedback"": ""comprehensive feedback summary"",
   ""requiresRevision"": <true|false>,
-  ""revisionSuggestions"": [""specific actionable suggestions""]
+  ""revisionSuggestions"": [""specific actionable suggestions""],
+  ""weakSectionIndices"": [<0-based section indices that need revision, or [] if none>]
 }}";
 
         var userMessage = $@"

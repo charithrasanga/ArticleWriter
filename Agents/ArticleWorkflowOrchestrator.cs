@@ -110,6 +110,7 @@ public class ArticleWorkflowOrchestrator
                         currentContent,
                         finalAssessment.Feedback,
                         finalAssessment.RevisionSuggestions,
+                        finalAssessment.WeakSectionIndices,
                         cancellationToken);
 
                     revisionCount++;

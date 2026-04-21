@@ -73,7 +73,13 @@ public record QualityAssessment(
     [property: JsonPropertyName("relevanceScore")] double RelevanceScore,
     [property: JsonPropertyName("feedback")] string Feedback,
     [property: JsonPropertyName("requiresRevision")] bool RequiresRevision,
-    [property: JsonPropertyName("revisionSuggestions")] string[] RevisionSuggestions
+    [property: JsonPropertyName("revisionSuggestions")] string[] RevisionSuggestions,
+    /// <summary>
+    /// 0-based indices of sections that need targeted revision.
+    /// Null or empty means revise the full article. Populated only when requiresRevision is true.
+    /// Nullable so deserialization succeeds even when the LLM omits this field.
+    /// </summary>
+    [property: JsonPropertyName("weakSectionIndices")] int[]? WeakSectionIndices = null
 );
 
 public record ResearchResult(

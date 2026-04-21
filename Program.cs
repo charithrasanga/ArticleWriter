@@ -39,7 +39,10 @@ static class Program
         }
         catch (Exception ex)
         {
-            AnsiConsole.WriteException(ex);
+            // AnsiConsole.WriteException has a known crash on certain stack-frame formats.
+            // Write a safe plain-text fallback instead.
+            try { AnsiConsole.WriteException(ex, ExceptionFormats.ShortenEverything); }
+            catch { Console.Error.WriteLine($"[ERROR] {ex.GetType().Name}: {ex.Message}"); }
             Environment.Exit(1);
         }
         finally

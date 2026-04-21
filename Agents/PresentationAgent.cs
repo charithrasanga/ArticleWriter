@@ -289,7 +289,7 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
         // C. Key takeaways
         if (takeaways.Count > 0)
         {
-            sb.AppendLine("""
+            sb.AppendLine($"""
                       <div class="bg-indigo-50 rounded-2xl p-8 mb-12 border border-indigo-100">
                         <h2 class="playfair text-2xl font-bold text-indigo-900 mb-6">{H(labelKeyTakeaways)}</h2>
                 """);
@@ -320,7 +320,7 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
         // E. References
         if (sources.Count > 0)
         {
-            sb.AppendLine("""
+            sb.AppendLine($"""
                       <div class="bg-white rounded-2xl shadow-sm p-8 mb-12">
                         <h2 class="text-xl font-semibold text-slate-700 mb-4">{H(labelReferences)}</h2>
                         <ol class="list-decimal list-inside space-y-2">
@@ -352,7 +352,7 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
         var tocItems = toc.Count > 0 ? toc : sections.Select(s => s.Title).ToList();
         if (tocItems.Count > 0)
         {
-            sb.AppendLine("""
+            sb.AppendLine($"""
                           <div class="bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
                             <p class="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">{H(labelContents)}</p>
                             <nav>
