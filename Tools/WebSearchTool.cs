@@ -1,5 +1,4 @@
 using ArticleWriterAgents.Models;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.ComponentModel;
@@ -46,9 +45,6 @@ public class WebSearchTool
         _logger.LogDebug("WebSearchTool: returned {Chars} chars for '{Query}'", formatted.Length, query);
         return formatted;
     }
-
-    /// <summary>Returns this tool as an <see cref="AIFunction"/> for use in <see cref="ChatOptions.Tools"/>.</summary>
-    public AIFunction AsAIFunction() => AIFunctionFactory.Create(SearchWebAsync);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -1,6 +1,5 @@
 ﻿using ArticleWriterAgents.Models;
 using ArticleWriterAgents.Tools;
-using ArticleWriterAgents.Utils;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -9,7 +8,6 @@ namespace ArticleWriterAgents.Agents;
 
 public class ResearchAgent : BaseAgent, IResearchAgent
 {
-    private readonly UrlValidator _urlValidator;
     private readonly WebSearchTool _webSearch;
     private readonly UrlValidatorTool _urlValidatorTool;
 
@@ -21,13 +19,11 @@ public class ResearchAgent : BaseAgent, IResearchAgent
     public ResearchAgent(
         IChatClient chatClient,
         ILogger<ResearchAgent> logger,
-        UrlValidator urlValidator,
         WebSearchTool webSearch,
         UrlValidatorTool urlValidatorTool,
         IToolCallReporter toolCallReporter)
         : base(chatClient, logger, toolCallReporter)
     {
-        _urlValidator     = urlValidator;
         _webSearch        = webSearch;
         _urlValidatorTool = urlValidatorTool;
     }
