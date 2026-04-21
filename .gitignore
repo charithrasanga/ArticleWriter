@@ -1,0 +1,45 @@
+# Build results
+bin/
+obj/
+out/
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio / VS Code
+.vscode/
+.vs/
+
+# Configuration files with secrets — never commit environment overrides.
+# appsettings.json is committed as an empty-values template.
+# Copy it to appsettings.Development.json and fill in your secrets.
+appsettings.Development.json
+appsettings.Production.json
+appsettings.Staging.json
+
+# Environment files
+.env
+.env.local
+
+# Azure Functions
+local.settings.json
+
+# Generated article HTML output
+article_*.html
+demo_*.html
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
