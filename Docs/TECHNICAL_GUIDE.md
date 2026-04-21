@@ -1,30 +1,56 @@
-# AI Article Writer - Technical Presentation Guide
+# AI Article Writer - Technical Guide
 
-## 1. Project Introduction
+## Document Purpose
 
-AI Article Writer is a .NET 8 multi-agent system that takes a topic and audience, researches the web, generates structured long-form content, validates quality, performs targeted revisions, and renders a polished responsive HTML article.
+This guide explains how the AI Article Writer system works from an engineering perspective.
+It is written for developers, architects, and technical stakeholders who need to understand:
 
-The design goal is to separate concerns into specialized agents while keeping orchestration deterministic and observable.
+1. System architecture
+2. Data contracts (DTOs/models)
+3. Agents and tools
+4. Runtime flow and quality loop
+5. Extensibility and operational behavior
+
+## Who Should Read This
+
+- Developers onboarding to the codebase
+- Engineers preparing demos or technical presentations
+- Architects reviewing system decomposition and reliability
+- QA/DevOps teams validating behavior and troubleshooting flows
 
 ---
 
-## 2. What You Can Present in a Session
+## 1. System Overview
 
-This project is ideal to demonstrate:
+AI Article Writer is a .NET 8 multi-agent pipeline that turns a user prompt into a fully rendered HTML article.
 
-1. Agentic architecture in an enterprise-friendly .NET codebase.
-2. Tool-use loops with explicit function calling.
-3. Quality gating with revision control.
-4. Performance optimization through parallel search and targeted revisions.
-5. Deterministic rendering layer (no AI hallucination in final HTML generation).
+Core stages:
+
+1. Research
+2. Content generation
+3. Quality assurance and revision
+4. Presentation rendering
+
+The orchestration logic is deterministic; the language model is used where generation or judgment is needed, while final rendering is done in C# for predictable output.
+
+Reference: `Program.cs`
+
+```csharp
+var orchestrator = host.Services.GetRequiredService<ArticleWorkflowOrchestrator>();
+var request = await ConsoleUI.CollectArticleRequestAsync(host.Services, config);
+var result = await ExecuteWithProgressAsync(orchestrator, request);
+ConsoleUI.DisplayResults(result);
+```
 
 ---
 
-## 3. System Architecture (High-Level)
+## 2. High-Level Architecture
+
+### 2.1 Diagram (Mermaid)
 
 ```mermaid
 flowchart LR
-    UI[Console UI / Spectre] --> ORCH[ArticleWorkflowOrchestrator]
+    UI[Console UI] --> ORCH[ArticleWorkflowOrchestrator]
 
     ORCH --> R[ResearchAgent]
     ORCH --> C[ContentCreationAgent]
@@ -35,118 +61,122 @@ flowchart LR
     R --> UVT[UrlValidatorTool]
     UVT --> UV[UrlValidator]
 
-    C --> ACT[ArticleCheckTool - Section Count]
-    Q --> ACW[ArticleCheckTool - Word Count]
-
-    P --> US[IUnsplashService / UnsplashService]
+    C --> ACT[ArticleCheckTool: CheckSectionCount]
+    Q --> ACW[ArticleCheckTool: CountWords]
+    P --> US[UnsplashService]
 
     WS --> SERPER[Serper API]
-    US --> UNSPLASH[Unsplash API]
-    R --> AOAI[Azure OpenAI GPT]
+    P --> UNSPLASH[Unsplash API]
+    R --> AOAI[Azure OpenAI]
     C --> AOAI
     Q --> AOAI
-
-    P --> HTML[Final HTML]
 ```
+
+### 2.2 Diagram (ASCII Fallback)
+
+```text
+Console UI
+   |
+   v
+ArticleWorkflowOrchestrator
+   |--> ResearchAgent ---------> WebSearchTool -----> Serper API
+   |         |                  UrlValidatorTool ---> UrlValidator
+   |
+   |--> ContentCreationAgent --> ArticleCheckTool (section count)
+   |
+   |--> QualityAssuranceAgent -> ArticleCheckTool (word count)
+   |
+   |--> PresentationAgent -----> UnsplashService ----> Unsplash API
+```
+
+If Mermaid appears as raw code in VS Code, open Markdown Preview (`Ctrl+Shift+V`) and ensure Mermaid support is enabled.
 
 ---
 
-## 4. End-to-End Workflow
+## 3. End-to-End Runtime Flow
 
-### 4.1 Runtime Sequence
+### 3.1 Sequence Diagram (Mermaid)
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant PR as Program + ConsoleUI
+    participant UI as Console UI
     participant O as Orchestrator
     participant R as ResearchAgent
     participant C as ContentCreationAgent
     participant Q as QualityAssuranceAgent
     participant P as PresentationAgent
 
-    U->>PR: Enter topic, audience, tone, length
-    PR->>O: ProcessArticleRequestAsync(request)
+    U->>UI: Enter topic, audience, tone, length
+    UI->>O: ProcessArticleRequestAsync(request)
 
     O->>R: ResearchAsync(request)
-    R-->>O: researchData JSON
+    R-->>O: research JSON
 
-    O->>C: CreateAsync(request, researchData)
+    O->>C: CreateAsync(request, research)
     C-->>O: article JSON draft
 
-    loop QA attempts until pass or max revisions
-        O->>Q: AssessAsync(request, article, attempt,...)
-        Q-->>O: QualityAssessment (score, suggestions, weakSectionIndices)
-        alt requiresRevision && attempt < max
-            O->>C: ReviseAsync(..., suggestions, weakSectionIndices)
+    loop until pass or max revisions
+        O->>Q: AssessAsync(...)
+        Q-->>O: QualityAssessment
+        alt requiresRevision
+            O->>C: ReviseAsync(..., weakSectionIndices)
             C-->>O: revised article JSON
         end
     end
 
-    O->>P: FormatAsync(request, finalArticle, assessment)
-    P-->>O: HTML string
-    O-->>PR: ArticleWorkflowResult
-    PR-->>U: Save/open HTML + show metrics
+    O->>P: FormatAsync(...)
+    P-->>O: final HTML
+    O-->>UI: ArticleWorkflowResult
 ```
 
-### 4.2 Orchestration Decisions
+### 3.2 Sequence (Plain Steps)
 
-- The orchestrator never overrides QA revision authority.
-- Revision count tracks real revision cycles, not loop iterations.
-- Progress and agent conversation logs are captured for live session visibility.
+1. User provides request in console UI.
+2. Orchestrator triggers `ResearchAgent`.
+3. Research data is passed to `ContentCreationAgent`.
+4. QA scores output and decides whether revision is needed.
+5. If needed, content is revised (targeted sections when available).
+6. `PresentationAgent` produces final HTML with images and localization labels.
+7. Result is displayed and optionally saved to file.
 
 Reference: `Agents/ArticleWorkflowOrchestrator.cs`
 
 ```csharp
-// QA agent is the authority — if it says no revision needed, we stop.
-if (!finalAssessment.RequiresRevision)
-    break;
-
-if (attempt < maxRevisions)
-{
-    currentContent = await _contentCreationAgent.ReviseAsync(
-        request,
-        currentContent,
-        finalAssessment.Feedback,
-        finalAssessment.RevisionSuggestions,
-        finalAssessment.WeakSectionIndices,
-        cancellationToken);
-}
+var researchData = await _researchAgent.ResearchAsync(request, cancellationToken);
+var currentContent = await _contentCreationAgent.CreateAsync(request, researchData, cancellationToken);
+finalAssessment = await _qaAgent.AssessAsync(request, currentContent, attempt, maxRevisions, _config.QualityThreshold, cancellationToken);
+var formattedContent = await _presentationAgent.FormatAsync(request, currentContent, finalAssessment, cancellationToken);
 ```
 
 ---
 
-## 5. Solution Structure
+## 4. Composition Root and Dependency Injection
 
-### 5.1 Entry and Composition Root
+The application is composed through DI in `Program.cs`.
 
-- `Program.cs`
-- `BuildHost(...)` wires all dependencies, config sections, and typed HttpClients.
-- Uses Azure OpenAI via API key OR `DefaultAzureCredential`.
+### 4.1 Important Registrations
+
+- `IChatClient` backed by Azure OpenAI
+- Typed `HttpClient` for URL validation, Serper, Unsplash
+- Agent interfaces and orchestrator
+- Tool call reporter for runtime telemetry
 
 Reference: `Program.cs`
 
 ```csharp
-services.AddSingleton<IChatClient>(_ =>
-{
-    var azureClient = string.IsNullOrWhiteSpace(apiKey)
-        ? new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential())
-        : new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
-
-    return azureClient.GetChatClient(deploymentName).AsIChatClient();
-});
+services.AddSingleton<IResearchAgent, ResearchAgent>();
+services.AddSingleton<IContentCreationAgent, ContentCreationAgent>();
+services.AddSingleton<IQualityAssuranceAgent, QualityAssuranceAgent>();
+services.AddSingleton<IPresentationAgent, PresentationAgent>();
+services.AddSingleton<ArticleWorkflowOrchestrator>();
 ```
 
 ---
 
-## 6. DTOs, Models, and Contracts
+## 5. Data Contracts (DTOs and Models)
 
-This is the core data contract layer (your "DTO" story for presentation).
-
-### 6.1 Request DTO
-
-- `ArticleRequest` captures topic, audience, length tier, tone, and key points.
-- `RequiredLength` exposes word target from `ArticleLength` value object.
+### 5.1 Request Model
 
 Reference: `Models/ArticleModels.cs`
 
@@ -163,10 +193,7 @@ public record ArticleRequest(
 }
 ```
 
-### 6.2 Quality DTO
-
-- `QualityAssessment` includes criterion scores, decision flag, revision suggestions.
-- `WeakSectionIndices` enables section-targeted revisions.
+### 5.2 Quality Model
 
 Reference: `Models/ArticleModels.cs`
 
@@ -179,9 +206,7 @@ public record QualityAssessment(
 );
 ```
 
-### 6.3 Workflow Result DTO
-
-- `ArticleWorkflowResult` combines final JSON, rendered HTML, quality stats, and completion metadata.
+### 5.3 Result Model
 
 Reference: `Models/ArticleModels.cs`
 
@@ -197,10 +222,11 @@ public record ArticleWorkflowResult(
 );
 ```
 
-### 6.4 Agent Interfaces (Contracts)
+---
 
-- `IResearchAgent`, `IContentCreationAgent`, `IQualityAssuranceAgent`, `IPresentationAgent`
-- Keeps orchestrator decoupled and testable.
+## 6. Agent Contracts
+
+Interfaces define clear responsibilities and keep orchestration testable.
 
 Reference: `Agents/IAgentContracts.cs`
 
@@ -208,7 +234,6 @@ Reference: `Agents/IAgentContracts.cs`
 public interface IContentCreationAgent
 {
     Task<string> CreateAsync(ArticleRequest request, string researchData, CancellationToken cancellationToken = default);
-
     Task<string> ReviseAsync(
         ArticleRequest request,
         string currentContent,
@@ -221,139 +246,69 @@ public interface IContentCreationAgent
 
 ---
 
-## 7. Services Layer
+## 7. Base Agent Runtime: Tool Loop and Retries
 
-### 7.1 Unsplash Service
+All agents derive from `BaseAgent`, which centralizes:
 
-- `IUnsplashService` abstraction for image resolution.
-- Falls back to source.unsplash.com when key is missing or API fails.
-- Presentation agent calls it in parallel for header + section images.
+1. LLM invocation with settings (`Temperature`, `MaxOutputTokens`)
+2. Tool-calling loop (`CallWithToolsAsync`)
+3. Retry/backoff for transient failures
+4. Tool call reporting hooks
 
-Reference: `Services/UnsplashService.cs`
+Reference: `Agents/BaseAgent.cs`
 
 ```csharp
-public async Task<string> ResolveImageUrlAsync(string query, string size, CancellationToken cancellationToken = default)
-{
-    if (string.IsNullOrWhiteSpace(_config.AccessKey))
-        return BuildFallbackUrl(size, query);
+var functionCalls = response.Messages
+    .SelectMany(m => m.Contents)
+    .OfType<FunctionCallContent>()
+    .ToList();
 
-    try
-    {
-        var apiUrl = _config.BuildApiUrl(size, query);
-        using var response = await _http.GetAsync(apiUrl, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            return BuildFallbackUrl(size, query);
-        ...
-    }
-    catch
-    {
-        return BuildFallbackUrl(size, query);
-    }
+if (functionCalls.Count == 0)
+    return response.Text ?? string.Empty;
+```
+
+Reference: `Agents/BaseAgent.cs`
+
+```csharp
+catch (Azure.RequestFailedException ex)
+    when (TransientStatusCodes.Contains(ex.Status) && attempt < maxAttempts)
+{
+    var delay = ResolveRetryDelay(ex, attempt);
+    await Task.Delay(delay, cancellationToken);
 }
 ```
 
 ---
 
-## 8. Tooling Layer
+## 8. Agents Deep Dive
 
-## 8.1 WebSearchTool
-
-- Wraps Serper search API.
-- Formats result snippets for LLM consumption.
-
-Reference: `Tools/WebSearchTool.cs`
-
-```csharp
-public async Task<string> SearchWebAsync(string query)
-{
-    var payload = JsonSerializer.Serialize(new { q = query, num = _resultCount });
-    using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-
-    var response = await _http.PostAsync("/search", content);
-    response.EnsureSuccessStatusCode();
-
-    var json = await response.Content.ReadAsStringAsync();
-    return FormatResults(json);
-}
-```
-
-### 8.2 UrlValidatorTool + UrlValidator
-
-- `UrlValidatorTool` exposes validation as LLM-callable function.
-- Uses trusted-domain whitelist to skip unnecessary HEAD calls.
-- Falls through to `UrlValidator.IsUrlValidAsync(...)` for real network checks.
-
-Reference: `Tools/UrlValidatorTool.cs`
-
-```csharp
-if (Uri.TryCreate(url, UriKind.Absolute, out var parsedUri)
-    && TrustedDomains.Contains(parsedUri.Host))
-{
-    return $"VALID — URL is accessible: {url}";
-}
-
-var isValid = await _validator.IsUrlValidAsync(url);
-```
-
-Reference: `Utils/UrlValidator.cs`
-
-```csharp
-using var request = new HttpRequestMessage(HttpMethod.Head, uri);
-request.Headers.Add("User-Agent", "ArticleWriter-UrlValidator/1.0");
-using var response = await _httpClient.SendAsync(request, cancellationToken);
-return response.IsSuccessStatusCode;
-```
-
-### 8.3 ArticleCheckTool
-
-- Deterministic validation tools for QA/content agents.
-- Includes control-character sanitation before parsing JSON.
-
-Reference: `Tools/ArticleCheckTool.cs`
-
-```csharp
-articleJson = Regex.Replace(articleJson, "[\x00-\x08\x0B\x0C\x0E-\x1F]", "");
-using var doc = JsonDocument.Parse(articleJson);
-```
-
----
-
-## 9. Agent Deep Dive
-
-### 9.1 ResearchAgent
+## 8.1 ResearchAgent
 
 Responsibilities:
 
-1. Build query set (overview + key point focused queries).
-2. Execute searches in parallel.
-3. Synthesize structured research JSON with validated sources.
-
-Performance optimization:
-
-- All search queries are pre-fetched in parallel using `Task.WhenAll`.
-- LLM now focuses on synthesis and selective URL validation.
+1. Build broad + key-point search queries
+2. Execute searches in parallel
+3. Synthesize structured research payload
+4. Validate candidate URLs through tool call
 
 Reference: `Agents/ResearchAgent.cs`
 
 ```csharp
-var searchTasks = queries.Select(q => _webSearch.SearchWebAsync(q)).ToList();
+var searchTasks = queries
+    .Select(q => _webSearch.SearchWebAsync(q))
+    .ToList();
+
 string[] searchResults = await Task.WhenAll(searchTasks);
 ```
 
-### 9.2 ContentCreationAgent
+## 8.2 ContentCreationAgent
 
 Responsibilities:
 
-1. Generate strict JSON article schema.
-2. Enforce one-section-per-key-point.
-3. Preserve language localization labels.
-4. Revise either targeted sections or full article.
-
-Targeted revision flow:
-
-- If QA returns `weakSectionIndices`, only those sections are rewritten.
-- Revised section array is merged back into original JSON.
-- Fallback to full revision when extraction/parsing fails.
+1. Generate strict JSON article schema
+2. Ensure one section per key point
+3. Preserve localization labels in JSON
+4. Support targeted section revision
 
 Reference: `Agents/ContentCreationAgent.cs`
 
@@ -364,46 +319,30 @@ if (weakSectionIndices is { Length: > 0 })
         request, currentContent, qualityFeedback,
         revisionSuggestions, weakSectionIndices, cancellationToken);
 }
-
-return await ReviseFullArticleAsync(
-    request, currentContent, qualityFeedback, revisionSuggestions, cancellationToken);
 ```
 
-Reference: `Agents/ContentCreationAgent.cs`
-
-```csharp
-for (int i = 0; i < targetIndices.Length && i < revisedArray.Count; i++)
-    origSections[targetIndices[i]] = revisedArray[i];
-```
-
-### 9.3 QualityAssuranceAgent
+## 8.3 QualityAssuranceAgent
 
 Responsibilities:
 
-1. Evaluate content using 8 quality criteria.
-2. Use tool call (`count_words_async`) for completeness scoring.
-3. Decide revision requirement and section-level weaknesses.
+1. Score quality dimensions
+2. Request word-count tool signal
+3. Return revision suggestions and weak section indices
 
 Reference: `Agents/QualityAssuranceAgent.cs`
 
 ```csharp
 var tools = new[] { _articleCheck.CountWordsFunction() };
 var response = await CallWithToolsAsync(systemPrompt, userMessage, tools, cancellationToken);
-var assessment = JsonSerializer.Deserialize<QualityAssessment>(json)
-    ?? throw new InvalidOperationException("Quality assessment returned null after deserialisation");
 ```
 
-### 9.4 PresentationAgent
+## 8.4 PresentationAgent
 
 Responsibilities:
 
-1. Parse final article JSON.
-2. Resolve all images in parallel.
-3. Build fully responsive HTML in deterministic C# renderer.
-
-Key design choice:
-
-- No LLM call during rendering. This guarantees every section appears in output and avoids output truncation/hallucinated markup.
+1. Parse article JSON
+2. Resolve images in parallel
+3. Render deterministic responsive HTML
 
 Reference: `Agents/PresentationAgent.cs`
 
@@ -418,49 +357,53 @@ await Task.WhenAll(sectionTasks.Prepend(headerTask));
 
 ---
 
-## 10. How Agents Call Tools (Mechanics)
+## 9. Tools and Services
 
-The tool loop is centralized in `BaseAgent.CallWithToolsAsync(...)`.
+## 9.1 WebSearchTool
 
-### 10.1 Tool Loop Lifecycle
-
-```mermaid
-flowchart TD
-    A[Build messages + ChatOptions.Tools] --> B[Call model]
-    B --> C{Function calls requested?}
-    C -- No --> D[Return final text]
-    C -- Yes --> E[Report iteration/tool events]
-    E --> F[Resolve tool by name]
-    F --> G[Invoke tool]
-    G --> H[Append tool result as ChatRole.Tool]
-    H --> I{Max iterations reached?}
-    I -- No --> B
-    I -- Yes --> J[Force final answer without tools]
-    J --> D
-```
-
-Reference: `Agents/BaseAgent.cs`
+Reference: `Tools/WebSearchTool.cs`
 
 ```csharp
-var functionCalls = response.Messages
-    .SelectMany(m => m.Contents)
-    .OfType<FunctionCallContent>()
-    .ToList();
+var payload = JsonSerializer.Serialize(new { q = query, num = _resultCount });
+using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+var response = await _http.PostAsync("/search", content);
+```
 
-foreach (var call in functionCalls)
+## 9.2 UrlValidatorTool
+
+Reference: `Tools/UrlValidatorTool.cs`
+
+```csharp
+if (Uri.TryCreate(url, UriKind.Absolute, out var parsedUri)
+    && TrustedDomains.Contains(parsedUri.Host))
 {
-    var fn = tools.FirstOrDefault(t =>
-        string.Equals(t.Name, call.Name, StringComparison.OrdinalIgnoreCase));
-    ...
-    messages.Add(new ChatMessage(ChatRole.Tool,
-        [new FunctionResultContent(call.CallId, resultText)]));
+    return $"VALID — URL is accessible: {url}";
 }
 ```
 
-### 10.2 Tool Telemetry for Live Demos
+## 9.3 ArticleCheckTool
 
-- `IToolCallReporter` provides iteration/call/result/max-iteration hooks.
-- `ConsoleToolCallReporter` prints concise trace lines with thread safety.
+Reference: `Tools/ArticleCheckTool.cs`
+
+```csharp
+articleJson = Regex.Replace(articleJson, "[\x00-\x08\x0B\x0C\x0E-\x1F]", "");
+using var doc = JsonDocument.Parse(articleJson);
+```
+
+## 9.4 UnsplashService
+
+Reference: `Services/UnsplashService.cs`
+
+```csharp
+if (string.IsNullOrWhiteSpace(_config.AccessKey))
+    return BuildFallbackUrl(size, query);
+```
+
+---
+
+## 10. Tool Call Observability
+
+The tool call trace shown in console is implemented through `IToolCallReporter`.
 
 Reference: `Agents/IToolCallReporter.cs`
 
@@ -468,7 +411,6 @@ Reference: `Agents/IToolCallReporter.cs`
 void ReportIteration(string agentName, int iteration, int callCount);
 void ReportToolCall(string agentName, string toolName, string argsJson);
 void ReportToolResult(string agentName, string toolName, string result, bool isError = false);
-void ReportMaxIterationsReached(string agentName, int max);
 ```
 
 Reference: `Presentation/ConsoleToolCallReporter.cs`
@@ -482,14 +424,14 @@ AnsiConsole.MarkupLine(
 
 ---
 
-## 11. Configuration and Runtime Controls
+## 11. Configuration Reference
 
-### 11.1 Key Config Areas
+Key sections in `appsettings.json`:
 
-- `AzureOpenAI` - endpoint, key/credential mode, deployment name.
-- `ArticleGeneration` - quality threshold and max revisions.
-- `Serper` - API key and result count.
-- `Images` - access key and image sizes.
+1. `AzureOpenAI`
+2. `ArticleGeneration`
+3. `Images`
+4. `Serper`
 
 Reference: `appsettings.json`
 
@@ -500,35 +442,14 @@ Reference: `appsettings.json`
 }
 ```
 
-### 11.2 Why These Matter in a Presentation
-
-- Show how product owners can tune quality and cost/latency without code changes.
-- Explain threshold conversion from 0-100 to 0-10 scoring in QA logic.
-
 ---
 
-## 12. Resilience and Failure Handling
+## 12. Operational and Reliability Notes
 
-### 12.1 Retry and Backoff
-
-- Handles 429/500/502/503.
-- Honors `retry-after` when available.
-- Uses exponential backoff fallback.
-
-Reference: `Agents/BaseAgent.cs`
-
-```csharp
-catch (Azure.RequestFailedException ex)
-    when (TransientStatusCodes.Contains(ex.Status) && attempt < maxAttempts)
-{
-    var delay = ResolveRetryDelay(ex, attempt);
-    await Task.Delay(delay, cancellationToken);
-}
-```
-
-### 12.2 Safe Exception Output
-
-- Program uses fallback plain-text error write in case Spectre exception formatting fails.
+1. Retry logic handles transient cloud/API failures.
+2. URL validation helps prevent dead-source citations.
+3. JSON sanitation in `ArticleCheckTool` avoids parse failures from control characters.
+4. Presentation rendering in C# avoids model truncation in final output phase.
 
 Reference: `Program.cs`
 
@@ -539,60 +460,28 @@ catch { Console.Error.WriteLine($"[ERROR] {ex.GetType().Name}: {ex.Message}"); }
 
 ---
 
-## 13. Performance Story (Great for Demo)
+## 13. Demo Script (Technical Session)
 
-### 13.1 Implemented Optimizations
-
-1. Parallel web search fan-out in `ResearchAgent`.
-2. Trusted-domain URL validation short-circuit.
-3. Targeted section revisions instead of full rewrite.
-4. Parallel image resolution in `PresentationAgent`.
-5. Max revision cap tuned to 2 by config.
-
-### 13.2 Impact Narrative
-
-- Reduced multi-round-trip latency in research phase.
-- Reduced token-heavy rewrite cycles by operating only on weak sections.
-- Preserved quality gate while improving throughput.
+1. Start with architecture overview diagram.
+2. Show orchestrator flow and QA authority rule.
+3. Demonstrate live tool call trace in console.
+4. Run end-to-end generation.
+5. Open generated HTML and point out localized labels, TOC, references, and images.
+6. Explain performance improvements: parallel search, targeted revisions, and parallel image fetch.
 
 ---
 
-## 14. Suggested Session Walkthrough (Step-by-Step)
+## 14. Troubleshooting Mermaid Charts
 
-1. Explain business problem: quality long-form content is slow and inconsistent.
-2. Introduce 4-agent architecture and why separation of concerns matters.
-3. Show orchestrator workflow diagram and sequence.
-4. Show tool-call mechanism in `BaseAgent`.
-5. Demo one run from console input to generated HTML.
-6. Open generated HTML and point out localized labels, TOC, references, visuals.
-7. Show QA decision + revision behavior from terminal logs.
-8. Explain optimizations (parallel search + targeted revision).
-9. Close with extensibility roadmap.
+If charts look like code blocks:
+
+1. Open Markdown Preview in VS Code (`Ctrl+Shift+V`).
+2. Ensure Mermaid support is enabled in your Markdown preview extension.
+3. Use the ASCII fallback diagrams in this document when preview plugins are unavailable.
 
 ---
 
-## 15. Extensibility Roadmap (Talking Points)
-
-1. Add citation confidence scoring and source freshness weighting.
-2. Add language-specific readability metrics in QA.
-3. Plug in alternate renderers (Markdown/PDF) via additional presentation agents.
-4. Add persistent run history and analytics dashboard.
-5. Add integration tests around synthetic tool responses.
-
----
-
-## 16. Quick Demo Checklist
-
-- `appsettings.Development.json` contains valid keys.
-- `dotnet run` starts and asks for article parameters.
-- Confirm tool call traces appear in console.
-- Confirm QA scoring appears.
-- Save and open generated HTML.
-- Verify labels are localized and references are linked.
-
----
-
-## 17. File Reference Index
+## 15. Source File Index
 
 - `Program.cs`
 - `Agents/BaseAgent.cs`
