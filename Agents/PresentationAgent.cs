@@ -46,13 +46,17 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
         var headerImgSize  = _imageConfig.HeaderSize;
         var sectionImgSize = _imageConfig.SectionSize;
 
+        // LLM outputs can occasionally include bare control chars (0x00-0x1F)
+        // that make JsonDocument.Parse fail and lead to empty rendered content.
+        var sanitizedContent = StripInvalidJsonControlChars(content);
+
         // Pre-resolve image queries to real Unsplash CDN URLs.
         var (headerImageUrl, sectionImageUrls) = await ResolveImageUrlsAsync(
-            content, headerImgSize, sectionImgSize, cancellationToken);
+          sanitizedContent, headerImgSize, sectionImgSize, cancellationToken);
 
         // Build HTML entirely in C# so every section is always rendered,
         // regardless of article length.
-        var html = BuildHtml(content, request, qualityAssessment, headerImageUrl, sectionImageUrls);
+        var html = BuildHtml(sanitizedContent, request, qualityAssessment, headerImageUrl, sectionImageUrls, _logger);
 
         _logger.LogInformation("Presentation formatting completed for topic: {Topic}", request.Topic);
         return html;
@@ -65,7 +69,8 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
         ArticleRequest request,
         QualityAssessment? qa,
         string headerImageUrl,
-        List<(string Title, string Url)> sectionImageUrls)
+      List<(string Title, string Url)> sectionImageUrls,
+      ILogger logger)
     {
         // ── Parse JSON ───────────────────────────────────────────────────────
         string title        = request.Topic;
@@ -135,9 +140,10 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
                 labelPublished    = GetStr(labelsEl, "published",    labelPublished);
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // If JSON is malformed, fall back to rendering whatever we have.
+          // If JSON is malformed, fall back to rendering whatever we have.
+          logger.LogWarning(ex, "PresentationAgent: could not parse article JSON in BuildHtml; rendering fallback shell only.");
         }
 
         // Estimate reading time (average 200 wpm).
@@ -235,7 +241,7 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
             sb.AppendLine($"""
                       <section id="{sectionSlug}" class="mb-16">
                         <div class="flex items-center gap-4 mb-6">
-                          <span class="playfair text-5xl font-bold text-indigo-100 select-none">{sectionNum}</span>
+                          <span class="playfair text-5xl font-bold select-none">{sectionNum}</span>
                           <h2 class="playfair text-3xl font-bold text-slate-900 leading-tight">{H(secTitle)}</h2>
                         </div>
                 """);
@@ -529,4 +535,7 @@ public class PresentationAgent : BaseAgent, IPresentationAgent
 
         return (headerTask.Result, resolvedSections);
     }
+
+      private static string StripInvalidJsonControlChars(string text)
+        => Regex.Replace(text, "[\x00-\x08\x0B\x0C\x0E-\x1F]", "");
 }
