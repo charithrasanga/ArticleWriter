@@ -71,26 +71,6 @@ flowchart LR
     C --> AOAI
     Q --> AOAI
 ```
-
-### 2.2 Diagram (ASCII Fallback)
-
-```text
-Console UI
-   |
-   v
-ArticleWorkflowOrchestrator
-   |--> ResearchAgent ---------> WebSearchTool -----> Serper API
-   |         |                  UrlValidatorTool ---> UrlValidator
-   |
-   |--> ContentCreationAgent --> ArticleCheckTool (section count)
-   |
-   |--> QualityAssuranceAgent -> ArticleCheckTool (word count)
-   |
-   |--> PresentationAgent -----> UnsplashService ----> Unsplash API
-```
-
-If Mermaid appears as raw code in VS Code, open Markdown Preview (`Ctrl+Shift+V`) and ensure Mermaid support is enabled.
-
 ---
 
 ## 3. End-to-End Runtime Flow
