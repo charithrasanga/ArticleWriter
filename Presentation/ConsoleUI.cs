@@ -392,7 +392,9 @@ internal static class ConsoleUI
         try
         {
             var fileName = $"article_{DateTime.Now:yyyyMMdd_HHmmss}.html";
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), fileName);
+            var outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), "Output");
+            Directory.CreateDirectory(outputDirectory);
+            var filePath = Path.Combine(outputDirectory, fileName);
 
             File.WriteAllText(filePath, result.FormattedContent);
             AnsiConsole.MarkupLine($"[green]✅ Saved to: [link]{filePath.EscapeMarkup()}[/][/]");

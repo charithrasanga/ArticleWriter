@@ -57,9 +57,9 @@ static class Program
             {
                 var config = ctx.Configuration;
 
-                var endpoint       = config["AzureOpenAI:Endpoint"]       ?? throw new InvalidOperationException("AzureOpenAI:Endpoint is required.");
+                var endpoint = config["AzureOpenAI:Endpoint"] ?? throw new InvalidOperationException("AzureOpenAI:Endpoint is required.");
                 var deploymentName = config["AzureOpenAI:DeploymentName"] ?? throw new InvalidOperationException("AzureOpenAI:DeploymentName is required.");
-                var apiKey         = config["AzureOpenAI:ApiKey"];
+                var apiKey = config["AzureOpenAI:ApiKey"];
 
                 services.AddSingleton<IChatClient>(_ =>
                 {
@@ -100,10 +100,10 @@ static class Program
                 services.AddSingleton<IConsoleWorkflowService, ConsoleWorkflowService>();
 
                 // Agents are stateless between calls — singletons are safe.
-                services.AddSingleton<IResearchAgent,         ResearchAgent>();
-                services.AddSingleton<IContentCreationAgent,  ContentCreationAgent>();
+                services.AddSingleton<IResearchAgent, ResearchAgent>();
+                services.AddSingleton<IContentCreationAgent, ContentCreationAgent>();
                 services.AddSingleton<IQualityAssuranceAgent, QualityAssuranceAgent>();
-                services.AddSingleton<IPresentationAgent,     PresentationAgent>();
+                services.AddSingleton<IPresentationAgent, PresentationAgent>();
                 services.AddSingleton<ArticleWorkflowOrchestrator>();
             })
             .Build();
